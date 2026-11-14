@@ -1,11 +1,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { getPrivateFileRecord, savePrivateFileRecord } from './db.ts';
 
-const PRIVATE_UPLOADS_ROOT = path.resolve(process.cwd(), '.private_uploads');
+const PRIVATE_UPLOADS_ROOT = process.env.VERCEL
+  ? path.resolve(os.tmpdir(), '.private_uploads')
+  : path.resolve(process.cwd(), '.private_uploads');
 
-if (!fs.existsSync(PRIVATE_UPLOADS_ROOT)) {
-  fs.mkdirSync(PRIVATE_UPLOADS_ROOT, { recursive: true });
+try {
+  if (!fs.existsSync(PRIVATE_UPLOADS_ROOT)) {
+    fs.mkdirSync(PRIVATE_UPLOADS_ROOT, { recursive: true });
+  }
+} catch {
+  // Read-only filesystem fallback on serverless environments
 }
 
 const ALLOWED_PHOTO_MIMES: Record<string, { ext: string; contentType: string }> = {
@@ -52,9 +59,13 @@ export async function saveApplicantPhoto(
   }
 
   const relativePath = `applications/${applicationId}/photo.${meta.ext}`;
-  const dir = path.join(PRIVATE_UPLOADS_ROOT, 'applications', applicationId);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(PRIVATE_UPLOADS_ROOT, relativePath), parsed.buffer);
+  try {
+    const dir = path.join(PRIVATE_UPLOADS_ROOT, 'applications', applicationId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(PRIVATE_UPLOADS_ROOT, relativePath), parsed.buffer);
+  } catch {
+    // Disk write is best-effort cache on serverless; Postgres DB stores the source of truth
+  }
 
   await savePrivateFileRecord(relativePath, meta.contentType, parsed.buffer);
   return relativePath;
@@ -74,9 +85,13 @@ export async function saveApplicantSignature(
   }
 
   const relativePath = `applications/${applicationId}/signature.png`;
-  const dir = path.join(PRIVATE_UPLOADS_ROOT, 'applications', applicationId);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(PRIVATE_UPLOADS_ROOT, relativePath), parsed.buffer);
+  try {
+    const dir = path.join(PRIVATE_UPLOADS_ROOT, 'applications', applicationId);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(PRIVATE_UPLOADS_ROOT, relativePath), parsed.buffer);
+  } catch {
+    // Disk write is best-effort cache on serverless; Postgres DB stores the source of truth
+  }
 
   await savePrivateFileRecord(relativePath, 'image/png', parsed.buffer);
   return relativePath;
@@ -87,20 +102,20 @@ export async function resolvePrivateFile(
 ): Promise<{ contentType: string; data: Buffer } | null> {
   if (!relativePath || relativePath.includes('..')) return null;
 
-  const fullPath = path.resolve(PRIVATE_UPLOADS_ROOT, relativePath);
-  if (!fullPath.startsWith(PRIVATE_UPLOADS_ROOT + path.sep)) {
-    return null;
-  }
-
-  if (fs.existsSync(fullPath)) {
-    const ext = path.extname(fullPath).toLowerCase();
-    const contentType =
-      ext === '.jpg' || ext === '.jpeg'
-        ? 'image/jpeg'
-        : ext === '.webp'
-        ? 'image/webp'
-        : 'image/png';
-    return { contentType, data: fs.readFileSync(fullPath) };
+  try {
+    const fullPath = path.resolve(PRIVATE_UPLOADS_ROOT, relativePath);
+    if (fullPath.startsWith(PRIVATE_UPLOADS_ROOT + path.sep) && fs.existsSync(fullPath)) {
+      const ext = path.extname(fullPath).toLowerCase();
+      const contentType =
+        ext === '.jpg' || ext === '.jpeg'
+          ? 'image/jpeg'
+          : ext === '.webp'
+          ? 'image/webp'
+          : 'image/png';
+      return { contentType, data: fs.readFileSync(fullPath) };
+    }
+  } catch {
+    // Disk read failed, fallback to DB
   }
 
   return getPrivateFileRecord(relativePath);

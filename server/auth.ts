@@ -27,7 +27,7 @@ function getSessionSecret(): string {
 }
 
 export function getAdminUsername(): string {
-  return process.env.ADMIN_USERNAME || 'admin';
+  return process.env.ADMIN_USERNAME || 'kausar_tirmizi';
 }
 
 export function verifyAdminPassword(password: string): boolean {
